@@ -1,5 +1,4 @@
 function[mapset,medians,signal_mapset,data_from_map,data_org]=create_initial_mapset_opts(tods,mapset,mapset_in,myopts)
- 
 
 myid=mpi_comm_rank+1;
 nproc=mpi_comm_size;
@@ -35,6 +34,7 @@ free_2gamma=get_struct_mem(myopts,'free_2gamma',1);
 remove_hwp=get_struct_mem(myopts,'remove_hwp',false);
 read_data_new=get_struct_mem(myopts,'read_data_new',false);
 gapfill_eig=get_struct_mem(myopts,'gapfill_eig',false);
+do_desidelobes=get_struct_mem(myopts,'do_desidelobes',false);
 
 abort_before_noise=get_struct_mem(myopts,'abort_before_noise',false);
 skip_mpi=get_struct_mem(myopts,'skip_mpi',false);
@@ -49,7 +49,17 @@ else
   save_seeds=false;
 end
 
-
+if(do_desidelobes),
+   if(do_desidelobes&(~exist("myopts.sl","var")|~exist("myopts.T_sl","var")|~exist("myopts.sl_det","var")))
+      mdisp('You requested sidelobe removal, but required input(s) are missing. No sidelobe removal!')
+      do_desidelobes=false;
+   else
+      if(do_desidelobes&(isempty(myopts.sl)|isempty(myopts.T_sl)|isempty(myopts.sl_det)))
+         mdisp('You requested sidelobe removal, but required input(s) are empty. No sidelobe removal!')
+         do_desidelobes=false;
+      end
+   end
+end
 
 do_noise=get_struct_mem(myopts,'do_noise');
 if (do_noise)
@@ -158,7 +168,7 @@ for j=1:length(tods),
     
     if (~does_tod_have_twogamma_fit(mytod))
       precalc_actpol_pointing_exact(mytod,2);
-      set_tod_twogamma_fit(mytod,'npoly_2gamma',3);
+      set_tod_twogamma_fit(mytod,'npoly_2gamma',3,'rescale_az_2gamma',true);
       free_tod_pointing_saved(mytod,free_2gamma);
     end
 
@@ -291,15 +301,31 @@ for j=1:length(tods),
       end
       mdisp('finished');
     end
-    
-    
-    if (exist('mapset_in')&(add_input_map)) | (~isempty(srccat))
+
+
+
+    if ((do_desidelobes) | (exist('mapset_in')&(add_input_map)) | (~isempty(srccat)))
       dat=get_tod_data(mytod);
       assign_tod_value(mytod,0);
+
+      if (do_desidelobes)
+         mdisp('Removing sidelobes');
+         remove_actpol_sidelobes(mytod,myopts);     
+      end
+
       if exist('mapset_in')&(add_input_map)
-        mdisp('adding input mapset into data.');
-        %data_org=dat;
-        mapset2tod_octave(mapset_in,mytod,j);
+        if (do_desidelobes)
+           mdisp('adding input mapset into data with de-sidelobe.');
+           dat_temp=get_tod_data(mytod);
+           assign_tod_value(mytod,0);
+           mapset2tod_octave(mapset_in,mytod,j);
+           dat_temp=dat_temp+get_tod_data(mytod);
+           push_tod_data(dat_temp,mytod);
+           clear dat_temp;
+        else
+           mdisp('adding input mapset into data.');
+           mapset2tod_octave(mapset_in,mytod,j);
+        end
       end
 
       if ~isempty(srccat)
@@ -353,7 +379,7 @@ for j=1:length(tods),
       mdisp(['sums are ' num2str([a1 a2-a1 input_scale_fac])]);
       push_tod_data(dat,mytod);      
     else
-      mdisp('no input mapset or source catalog');
+      mdisp('no input mapset or source catalog or sidelobe');
     end
     %mdisp('doobydoobydo.');
 
@@ -465,7 +491,6 @@ for j=1:length(tods),
     fname=sprintf('%s.%d.data',outroot,myctime);
     write_tod_data_c(mytod,fname);
   end
-  
 
   if (find_modes) 
     if (find_modes_new)
@@ -536,12 +561,11 @@ for j=1:length(tods),
       mdisp('Aborting before noise, as requested.');
       return;
     end
-    
+
     if (gapfill_eig)
       dat=gapfill_eigenmode(get_tod_data(mytod),mytod,myopts);
       push_tod_data(dat,mytod);
     end
-
 
     use_current_data=false;
     if remove_corrnoise,
@@ -738,7 +762,7 @@ for j=1:length(tods),
   mdisp(['finished processing TOD in ' num2str(86400*(tt_stop-tt_start))])
 end
 mdisp('master has finished his TODs');
-disp(['process ' num2str(myid) ' has finished initial mapset.']);
+
 if isfield(mapset,'skymap')
   if isfield(mapset.skymap,'partition')
     mapset.skymap=skymap2octave(mapset.skymap);
