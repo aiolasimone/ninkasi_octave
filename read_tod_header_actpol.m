@@ -13,10 +13,16 @@ calib_dir=get_keyval_default('calib_dir','',varargin{:});
 calib_tail=get_keyval_default('calib_tail','calib.txt',varargin{:});
 calib_fmt=get_keyval_default('calib_fmt','',varargin{:});
 
+read_hwp=get_keyval_default('read_hwp',false,varargin{:}); %Do we have HWP?
+hwp_fac=get_keyval_default('hwp_fac',-1,varargin{:}); %Make the HWP rotate in the opposite direction
+hwp_dir=get_keyval_default('hwp_dir','',varargin{:}); %Where is the external angle solution ?
+hwp_name_tail=get_keyval_default('hwp_name_tail','',varargin{:}); %Any tail tail name?
+
 tod_offsets=get_keyval_default('tod_offsets',[],varargin{:});
 offsets=get_keyval_default('offsets',[],varargin{:});
 cuts=get_keyval_default('cuts','',varargin{:});
 force_maxprime=get_keyval_default('force_maxprime',false,varargin{:}); %due to problems with season 1 cuts, make this an option
+
 if isempty(offsets)
   error(['must have offsets defined']);
 end
@@ -38,8 +44,38 @@ end
   dx=offsets(:,3);
   dy=offsets(:,4);
   theta=offsets(:,5);
-
+ 
   [cpu_s,cpu_us,az_raw,el_raw,flags]=read_many_dirfile_channels(tod_name,'cpu_s','cpu_us','az','el','enc_flags');
+
+  if (read_hwp),
+     if (~isempty(hwp_dir)),
+        foo=tod_name(max(find(tod_name=='/'))+1:end);
+        if (~exist([hwp_dir '/' foo hwp_name_tail]))
+           hwp_dir='';
+        end
+     end
+
+     if (isempty(hwp_dir)),
+        which_arr=tod_name(end);
+        disp(['Reading HWP angle from TOD dirfile for: ' tod_name]);
+        [hwp_ang]=read_many_dirfile_channels(tod_name,['hwp_pa' which_arr '_ang']);
+        if (max(hwp_ang)!=0),
+           hwp_ang=hwp_ang/max(hwp_ang)*2.*pi;
+           hwp_ang=hwp_ang*hwp_fac;
+        else
+           mdisp(['HWP probably not spinning -- angles mean/std are: ' num2str(mean(hwp_ang)) ' ' num2str(std(hwp_ang))]);
+        end
+     else
+        disp(['Reading HWP angle from: ' hwp_dir '/' foo hwp_name_tail]);
+        fid=fopen([hwp_dir '/' foo hwp_name_tail]);
+        hwp_ang=fread(fid,inf,'float');
+        fclose(fid);
+        hwp_ang=hwp_ang*hwp_fac;
+        hwp_ang=hwp_ang/180.*pi;
+     end
+  end
+ 
+
   if ~isempty(cuts)
     [nsamp,samp_offset]=read_cuts_octave([],cuts,varargin{:})
     nsamp_org=nsamp;
@@ -68,13 +104,15 @@ end
       cpu_us=cpu_us(samp_offset+1:last_samp);
       az_raw=az_raw(samp_offset+1:last_samp);
       el_raw=el_raw(samp_offset+1:last_samp);
-      flags=flags(samp_offset+1:last_samp);     
+      flags=flags(samp_offset+1:last_samp);
+      if (read_hwp), hwp_ang=hwp_ang(samp_offset+1:last_samp); end
     else
       cpu_s=cpu_s(samp_offset+1:samp_offset+nsamp);
       cpu_us=cpu_us(samp_offset+1:samp_offset+nsamp);
       az_raw=az_raw(samp_offset+1:samp_offset+nsamp);
       el_raw=el_raw(samp_offset+1:samp_offset+nsamp);
       flags=flags(samp_offset+1:samp_offset+nsamp);
+      if (read_hwp), hwp_ang=hwp_ang(samp_offset+1:samp_offset+nsamp); end
     end
   else
     samp_offset=0;
@@ -88,27 +126,34 @@ end
     %and they don't seem to be getting picked up by the flags
     az_raw(ii)=median(az_raw);
     el_raw(ii)=median(el_raw);
+    if (read_hwp & (isempty(hwp_dir))),
+        disp('Setting to median angle for HWP for ct=0 sample.'); 
+        hwp_ang(ii)=median(hwp_ang);
+    end %Need to change this, though!
   end
 
   az=az_raw*2.682209174765e-06 - 1.825699070000e+01;
   el=el_raw*-2.682209174765e-06 + 2.119976743000e+02;
   badinds=find(((flags==8)|(flags==24)));
 
-  for jj=1:length(badinds),
+  for jj=1:length(badinds), %Check this chuck here.
     if badinds(jj)==1,
       az(badinds(jj))=median(az);
       el(badinds(jj))=median(el);
+      if (read_hwp & (isempty(hwp_dir))), 
+        hwp_ang(badinds(jj))=median(hwp_ang); %Check this
+      end
     else
       az(badinds(jj))=az(badinds(jj)-1);
       el(badinds(jj))=el(badinds(jj)-1);
+      if (read_hwp & (isempty(hwp_dir))), 
+         hwp_ang(badinds(jj))=hwp_ang(badinds(jj)-1); %Check this
+      end
     end
   end
 
-
-
   tod=allocate_tod_c();
-  
-  
+    
   set_tod_ndata_c(tod,length(az));
   set_tod_nsamp_offset_c(tod,samp_offset);
   set_tod_altaz_c(tod,el*pi/180,az*pi/180);
@@ -116,9 +161,11 @@ end
   set_tod_dt_c(tod,median(diff(ct)));
   set_tod_rowcol_c(tod,rr,cc);
   set_tod_filename(tod,tod_name);
+  if (read_hwp), set_tod_hwp_angle_c(tod,hwp_ang); end
+
   if iscell(tod_name), tod_name=tod_name{1};end;
   alloc_tod_cuts_c(tod);
-  
+
   %tod_offsets=read_text_file_comments(['/home/mhasse/depot/TODOffsets/' field_tag '_130916/offsets.txt']);
   %tod_offsets=parse_tod_offsets(tod_offsets);
   %[tod_dx,tod_dy]=get_tod_offset(tod_names,tod_offsets);
@@ -214,4 +261,3 @@ assert(ii(1)>1);
 for j=1:length(ii),
   vec(ii(j))=vec(ii(j)-1)+dt;
 end
-
