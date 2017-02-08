@@ -1,4 +1,22 @@
-function[value]=write_skymap_cea_fits(map,fname,comments)
+function[value]=write_skymap_cea_fits(map,fname,varargin)
+%write a cea fits file out, but set crval1 to be in the center of the map
+%flips Q/U signs for HWP data.
+%To be able to write multiple comments needs to be varargin
+
+map_vec=get_keyval_default('rescale_map_vec',[],varargin{:}); %read the vector to rescale maps
+comments=varargin;
+isok=true(length(comments),1); %even if map_vec is empty, let's see if the keyword is there
+for j=1:length(comments),
+   foo=0;
+   if(ischar(comments{j})),
+      foo=strcmp(comments{j},'rescale_map_vec'); 
+   end
+   if(foo),
+      isok(j)=false;
+      isok(j+1)=false;
+   end
+end
+comments=comments(isok);
 
 if isstruct(map)
   assert(isfield(map,'map'));
@@ -9,12 +27,22 @@ end
 assert(class(map)=='int64');
 
 mm=skymap2octave(map);
-
-
+if(~isempty(map_vec)),
+  mdisp('Here')
+  mm(1,:,:)*=map_vec(1);
+  mm(2,:,:)*=map_vec(2);
+  mm(3,:,:)*=map_vec(3);
+end
 
 [rapix,decpix,radelt,decdelt,pv]=get_skymap_cea_params_c(map);
 keys={};
 vals={};
+
+
+%now force the reference pixel to be in the center of the map
+ra_ref_pix=round(0.5*size(mm,1));
+ra_ref=radelt*(ra_ref_pix-rapix);
+rapix=ra_ref_pix;
 
 %[keys,vals]=set_keyval_val('SIMPLE','T',keys,vals);
 [keys,vals]=set_keyval_val('SIMPLE',true,keys,vals);
@@ -35,7 +63,7 @@ vals={};
 [keys,vals]=set_keyval_val('CUNIT1','        ',keys,vals);
 [keys,vals]=set_keyval_val('CUNIT2','        ',keys,vals);
 
-[keys,vals]=set_keyval_val('CRVAL1',0,keys,vals);
+[keys,vals]=set_keyval_val('CRVAL1',ra_ref,keys,vals);
 [keys,vals]=set_keyval_val('CRVAL2',0,keys,vals);
 [keys,vals]=set_keyval_val('CDELT1',radelt,keys,vals);
 [keys,vals]=set_keyval_val('CDELT2',decdelt,keys,vals);

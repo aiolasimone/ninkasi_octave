@@ -1,7 +1,7 @@
 function[x]=run_pcg_corrnoise_precon_octave(tods,x,b,precon,fun,priorfun,varargin)
 %function[x,best]=run_pcg_corrnoise_precon_octave(tods,x,b,precon,fun,priorfun,varargin)
-
 %x is a mapset, could be clear
+
 myid=mpi_comm_rank+1;
 nproc=mpi_comm_size;
 
@@ -24,7 +24,8 @@ if (1)
   profile=get_struct_mem(myopts,'profile',false);
   cache_iter=get_struct_mem(myopts,'cache_iter',0);
   restart=get_struct_mem(myopts,'restart',false);
-  
+  map_vec=get_struct_mem(myopts,'rescale_map_vec',[]);
+   
 else
   maxiter=get_keyval_default('maxiter',50,varargin{:});
   tol=get_keyval_default('tol',1e-8,varargin{:});
@@ -35,8 +36,8 @@ else
   profile=get_keyval_default('profile',false,varargin{:});
   cache_iter=get_keyval_default('cache_iter',0,varargin{:});
   restart=get_keyval_default('restart',false,varargin{:});
+  map_vec=get_struct_mem('rescale_map_vec',[],varargin{:});
 end
-
 
 
 if (myid==1)
@@ -45,6 +46,7 @@ if (myid==1)
   disp(['save tag is ' save_tag]);
   disp(['tol is ' num2str(tol)]);
   disp(['maxiter is ' num2str(maxiter)]);
+  disp(['map rescale fac vector is [' num2str(map_vec) ']']);
 end
 
 mpi_barrier;
@@ -82,15 +84,12 @@ end
 
 if isfield(ax,'skymap')
   if isfield(ax.skymap,'partition')
-    write_map(ax.skymap,[save_tag '_ax']);
+    write_map(ax.skymap,[save_tag '_ax'],'rescale_map_vec',map_vec);
   else
     if myid==1
-      write_map(ax.skymap,[save_tag '_ax']);
+      write_map(ax.skymap,[save_tag '_ax'],'rescale_map_vec',map_vec);
     end
-    if myid==1,
-      fieldnames(ax)
-    end
-
+    fieldnames(ax)
   end
 end
 
@@ -126,16 +125,12 @@ end
 
 
 if exist('priorfun')
-  %disp('evaluating prior');  
   ax=feval(priorfun,ax,x);
-  %disp('evaluated.');
 end
 
 r=add_mapset(b,ax,-1);
 if do_precon,
-  %disp('evaluating precon');
   Mr=feval(fun,r,precon);
-  %disp('evaluated');
 else
   Mr=r;
 end
@@ -388,11 +383,11 @@ while ((rMr>r0sqr*tol)&(iter<maxiter)),
         if isfield(x,'skymap')
           
           if isfield(x.skymap,'partition')
-            write_map(x.skymap,[save_tag num2str(iter)])
+            write_map(x.skymap,[save_tag num2str(iter)],'rescale_map_vec',map_vec);
           else
             if myid==1
               octave2skymap(x.skymap);
-              write_map(x.skymap.mapptr,[save_tag num2str(iter)]);
+              write_map(x.skymap.mapptr,[save_tag num2str(iter)],'rescale_map_vec',map_vec);
               %write_simple_map_c(x.skymap.mapptr,[save_tag num2str(iter) '.map']);          
             end
           end
